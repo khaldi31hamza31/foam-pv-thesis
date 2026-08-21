@@ -1,0 +1,46 @@
+#!/bin/bash
+# Maillage genere par GMSH (option 1 recommandee par l'encadrant) puis
+# converti via gmshToFoam -- geometrie de plaque VRAIMENT inclinee.
+set -eo pipefail
+CASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$CASE_DIR"
+
+if [ -z "$WM_PROJECT_DIR" ]; then
+    echo "ERREUR : environnement OpenFOAM non charge."
+    exit 1
+fi
+echo "OpenFOAM detecte : $WM_PROJECT_DIR"
+
+echo "==> Nettoyage"
+rm -rf 0 constant/polyMesh postProcessing log.* processor*
+
+echo "==> Copie des conditions initiales"
+cp -r 0.orig 0
+
+echo "==> [1/5] Maillage GMSH -> MSH"
+gmsh -3 plaque.geo -o plaque.msh -format msh2 2>&1 | tee log.gmsh
+
+echo "==> [2/5] Conversion gmshToFoam"
+gmshToFoam plaque.msh 2>&1 | tee log.gmshToFoam
+
+echo "==> IMPORTANT : verifiez/corrigez constant/polyMesh/boundary avant"
+echo "    de continuer (types corrects : frontAndBack=empty, plate=wall,"
+echo "    sideA/sideB=symmetryPlane, inlet/outlet=patch). Voir README_gmsh.md."
+echo "    Appuyez sur Entree pour continuer une fois verifie, ou Ctrl+C pour"
+echo "    corriger le fichier a la main d'abord."
+read -r _
+
+echo "==> [3/5] checkMesh"
+checkMesh 2>&1 | tee log.checkMesh
+if grep -q "Failed" log.checkMesh; then
+    echo "ERREUR : checkMesh signale des problemes. Voir log.checkMesh."
+    exit 1
+fi
+
+echo "==> [4/5] renumberMesh"
+renumberMesh -overwrite 2>&1 | tee log.renumberMesh
+
+echo "==> [5/5] simpleFoam (premier plan)"
+simpleFoam 2>&1 | tee log.simpleFoam
+
+echo "==> Termine. postProcessing/forceCoeffs1/ contient Cd/Cl."
